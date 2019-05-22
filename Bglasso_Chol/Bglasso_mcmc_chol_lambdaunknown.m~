@@ -1,0 +1,265 @@
+function [T_save,d_save,C_save,Sig_save,lambda_save] = Bglasso_mcmc_chol_lambdaunknown(S,n,a_lambda,b_lambda,C,burnin,nmc)
+%Input:
+%     S = Y'*Y : sample covariance matrix * n
+%     n: sample size
+%     lambda:   |C|^(n/2) exp(-1/2 (SC) -  lambda/2 ||C||_1 );
+%     C: initial partial covariance matrix;
+%     burnin, nmc : number of MCMC burnins and saved samples
+%     lambda ~ Ga
+
+[p] = size(S,1);
+C_save = zeros(p,p,nmc);
+Sig_save = zeros(p,p,nmc);
+
+lambda_save = zeros(1,nmc);
+
+indmx = reshape([1:p^2],p,p); % Lowertriangular matrix index
+lowerind = indmx(tril(indmx,-1)>0); 
+
+
+
+Psi = chol(C)';  D = diag(diag(Psi)).^2; 
+T =  Psi*inv(sqrt(D)); 
+
+
+cut = 1e-2;  %%%
+
+d_save = zeros(p,nmc); T_save = zeros(p,p,nmc);
+
+
+signT_full = [-1*ones(p,1),-tril(ones(p),-1)+triu(ones(p))];
+pp = p*(p+1)/2;signd_full = [-1*ones(pp,1),-tril(ones(pp),-1)+triu(ones(pp))];
+
+
+%    b_post = b_lambda + sum(abs(C(:)))/2;
+%    a_post = a_lambda + p*(p+1)/2;
+%    lambda = gamrnd(a_post,1/b_post,1);  % Lambda initials
+
+for iter = 1: burnin+nmc
+   % tic
+    
+%      if(mod(iter,500)==0)
+%          iter
+%          
+%   %       save ./Result/CallCenterBglasso T_save d_save C_save Sig_save lambda_save
+%      end
+
+
+    
+    C = T*D*T';
+    b_post = b_lambda + sum(abs(C(:)))/2;
+    
+    a_post = a_lambda + p*(p+1)/2;
+ 
+%     a_post = a_lambda+p*(p-1)/2;
+%     b_post = b_lambda + sum(abs(C(:)))/2-sum(diag(C))/2;
+
+   lambda = gamrnd(a_post,1/b_post,1);
+    
+   S_D = T'*S*T;
+    for j = 1:p
+        
+       shape_post = p-j+n/2+1;
+       a_D = T(:,j)*T(:,j)';
+       scale_1 = sum(diag(a_D))*lambda/2;
+       ind = lowerind(abs(a_D(lowerind))>cut);       
+       a_D = a_D(ind);
+       
+       T1 = T; T1(:,j)=[];
+       D1 = D; D1(j,:)=[]; D1(:,j)=[];
+       b_D = T1*D1*T1';
+       b_D = b_D(ind);
+       
+       
+        sign_aD = sign(a_D);
+        
+        a_D = a_D.*sign_aD;
+        b_D = b_D.*sign_aD; 
+        
+        
+        
+       boundary = -b_D./a_D;       
+       
+       ind1 = boundary<=0;
+       scale_1 = scale_1+lambda*sum(a_D(ind1));
+       
+       ind = boundary > 0;       
+       boundary = boundary(ind); 
+       a_D = a_D(ind);
+       b_D = b_D(ind);
+           
+       
+       ib = length(boundary);
+       if(ib==0)
+          scale_post = S_D(j,j)/2 + scale_1;       
+          D(j,j) = gamrnd(shape_post,1./scale_post);
+
+       else
+           
+        [boundary_incr,bb] = sort(boundary);
+   
+           a_D = a_D(bb);
+           b_D = b_D(bb);
+           
+           sign_d = signd_full(1:ib,1:ib+1);       
+           scale_post = S_D(j,j)/2 + scale_1 + sign_d' * a_D.*lambda;     
+           c = sign_d' * b_D.*lambda;   
+
+           
+           k = sum(scale_post <=0);
+           
+           if(k==0)
+               
+               
+               w = (gamcdf(repmat(boundary_incr,1,2),shape_post,1./[scale_post(1:end-1),scale_post(2:end)]));  
+        
+
+               aa = - log(scale_post).*shape_post;               
+               w1 = max(0,[w(1:end,1);1]-[0;w(1:end,2)]);
+
+               w =   log(w1) + aa - c;                    
+               w = exp(w-max(w))./sum(exp(w-max(w)));
+               
+               ii = randsample([1:length(boundary)+1],1,true,w');
+
+             if( 1<ii & ii <length(boundary)+1)    
+               lower = boundary_incr(ii-1);
+               upper = boundary_incr(ii);
+               D(j,j) = sample_gamrnd_truncated(shape_post,1/scale_post(ii),lower,upper);
+             elseif(ii == 1);
+               upper = boundary_incr(ii);
+               D(j,j) =    sample_gamrnd_truncated_above(shape_post,1/scale_post(ii),upper);
+             else
+               lower = boundary_incr(ii-1);
+               D(j,j) =   sample_gamrnd_truncated_below(shape_post,1/scale_post(ii),lower);
+             end
+           
+           
+           else
+         
+              scale_neg =scale_post(1:k);           
+              scale_pos =scale_post(k+1:end);
+              bb = [0;boundary_incr(1:k)];
+              w_neg = log_pexp_pdf(repmat(shape_post,k,1),-scale_neg,[bb(1:k)],[bb(2:k+1)]);
+              w_pos = (gamcdf(repmat(boundary_incr(k+1:end),1,2),shape_post,1./[scale_pos(1:end-1),scale_pos(2:end)]));  
+
+              aa = - log(scale_pos).*shape_post+gammaln(shape_post);
+              w_pos =   log([w_pos(1:end,1);1]-[gamcdf(boundary_incr(k),shape_post,1./scale_pos(1));w_pos(1:end,2)]) + aa;                      
+           
+              w = [w_neg;w_pos]-c;
+              w = exp(w-max(w))./sum(exp(w-max(w)));
+              
+              ii = randsample([1:length(boundary)+1],1,true,w');
+
+             if( 1<ii & ii <length(boundary)+1)    
+               lower = boundary_incr(ii-1);
+               upper = boundary_incr(ii);
+               D(j,j) = sample_gamrnd_truncated(shape_post,1/scale_post(ii),lower,upper);
+             elseif(ii == 1);
+               upper = boundary_incr(ii);
+               D(j,j) =    sample_gamrnd_truncated_above(shape_post,1/scale_post(ii),upper);
+             else
+               lower = boundary_incr(ii-1);
+               D(j,j) =   sample_gamrnd_truncated_below(shape_post,1/scale_post(ii),lower);
+             end
+              
+           end
+       end
+
+    end    
+ 
+    for i = 2:p
+        for j = 1:i-1
+   
+        t2 = T(:,j); t2(i)=[];
+        s2 = S(:,i); s2(i) = [];
+        pre_T = D(j,j)*(S(i,i)+lambda);       
+        
+        m1 = D(j,j) * t2'*s2;
+        
+%%%% L1 shrinkage %%%%%%%%%%%%%%%%%%%%%%%%%%        
+        a_T = D(j,j).* T([j:i-1,i+1:end],j); 
+        
+        aa = T(i,1:i)*D(1:i,1:i); aa(j)=[];       
+        bb = T([j:i-1,i+1:end],1:i); bb(:,j)=[];
+        b_T = bb*aa';
+        
+        sign_aT = sign(a_T);
+        
+        a_T = a_T.*sign_aT;
+        b_T = b_T.*sign_aT; 
+        
+        ind = (a_T)>cut;
+        a_T = a_T(ind);
+        b_T = b_T(ind);
+        
+        boundary = -b_T./a_T;
+        ib = length(boundary);
+        if(ib==0)
+
+          mu_T = -inv(pre_T)*(m1);
+          T(i,j) = mu_T+1/sqrt(pre_T)*randn(1);
+
+        else
+          [boundary_incr,bb] = sort(boundary);
+   
+           a_T = a_T(bb);
+           b_T = b_T(bb);
+       
+           
+           sign_T = signT_full(1:ib,1:ib+1);
+        
+        m2 =  sign_T' * a_T*lambda;     
+        c2 =  sign_T' * b_T*lambda;   
+ 
+        mu_T = -inv(pre_T)*(m1+m2);
+        
+     w = normcdf(repmat(boundary_incr,1,2),[mu_T(1:end-1),mu_T(2:end)],1/sqrt(pre_T));  
+    
+     w = log([w(1:end,1);1]-[0;w(1:end,2)]) -c2+1/2*(m1+m2).^2./pre_T;           
+
+      w = (exp(w-max(w)))./sum((exp(w-max(w))));
+          
+           ii = randsample([1:ib+1],1,true,w');
+      
+           if( 1<ii & ii <ib+1)    
+           lower = boundary_incr(ii-1);
+           upper = boundary_incr(ii);
+           T(i,j) = rand_tn(mu_T(ii),1/sqrt(pre_T),lower,upper);
+  
+                 if(T(i,j) == Inf)
+                    return;
+                end
+           
+           elseif(ii == 1);
+           upper = boundary_incr(ii);
+           T(i,j) = rand_tn_above(mu_T(ii),1/sqrt(pre_T),upper);
+                 if(T(i,j) == Inf)
+                    return;
+                end
+           
+           else
+           lower = boundary_incr(ii-1);
+           T(i,j) = rand_tn_below(mu_T(ii),1/sqrt(pre_T),lower);
+           end
+     
+           
+        end
+        
+        
+        end
+    
+    end
+    
+        if(iter>burnin)
+    d_save(:,iter-burnin) = diag(D);
+    T_save(:,:,iter-burnin) = T;
+    C_save(:,:,iter-burnin) = C;
+    Sig_save(:,:,iter-burnin) = inv(C);
+    lambda_save(iter-burnin) = lambda;
+    end
+
+
+    
+ %  toc
+end

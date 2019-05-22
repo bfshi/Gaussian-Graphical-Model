@@ -1,0 +1,86 @@
+
+y = load('../Data/ForexDevelopedCountryData.csv');
+% EUR GBP SEK NOK DKK CHF JPY CAD AUD NZD
+
+rate = y;
+rate(:,[1,2,9,10]) = 1./rate(:,[1,2,9,10]);
+p = size(rate,2);
+
+r = diff(log(rate))*100;
+
+
+r(:,5) = []; p = size(r,2);
+%%%% Weekly returns 
+r_weekly = zeros(390,p);
+for i = 1:390
+    r_weekly(i,:) = sum(r((i-1)*5+1:i*5,:));
+end
+
+T = 390
+
+a_lambda = 1; b_lambda = 0.01;
+burnin = 200; nmc = 2000;
+
+n_train = 156; n_test = 52;
+
+loglik_glasso_cv = zeros(1,T-n_test-n_train+1);
+loglik_glasso_mcmc = zeros(1,T-n_test-n_train+1);
+loglik_bglasso = zeros(1,T-n_test-n_train+1);
+
+for t = n_train:T
+
+S_train = r_weekly(t-n_train+1:t,:)'*r_weekly(t-n_train+1:t,:);
+
+
+rhopath = [0:0.002:0.2];
+[rhomax] = glasso_cv(r_weekly(t-n_train+1:t,:)',rhopath,5);
+
+rhomax
+
+C_glasso_cv = L1precisionBCD(S_train/n_train,rhomax);
+
+
+%% Bayes Mean
+C = inv(S_train/n_train);
+T = diag(sqrt(diag(C)));
+
+b_lambda = 1/((rhomax*n_train)*10);
+ 
+%[C_save,lambda_save] = Bglasso_mcmc(S_train,n_train,a_lambda,b_lambda,C_glasso_cv,burnin,nmc);
+
+[T_save,d_save,C_save_chol,Sig_save,lambda_save] = Bglasso_mcmc_chol_lambdaunknown(S_train,n_train,a_lambda,b_lambda,C_glasso_cv,200,nmc);
+
+
+
+[T_save,d_save,C_save_chol,Sig_save,lambda_save] = Bglasso_mcmc_chol_lambdaunknown(S_train,n_train,a_lambda,b_lambda,C_glasso_cv,200,nmc);
+
+[T_save,d_save,C_save_chol,Sig_save] = Bglasso_mcmc_chol_lambdafix(S_train,n_train,rhomax*n_train,C_glasso_cv,200,nmc);
+
+%% Prediction Comparison  
+S_test = r_weekly(t+1:t+n_test,:)'*r_weekly(t+1:t+n_test,:);
+
+% (i) Glasso+CV
+loglik_glasso_cv(t-n_train+1) = log(det(C_glasso_cv)) - trace(S_test/n_test*C_glasso_cv);
+
+
+% (ii) Glasso+MCMC
+C_glasso_mcmc = L1precisionBCD(S_train/n_train,median(lambda_save)/n_train);
+loglik_glasso_mcmc(t-n_train+1) = log(det(C_glasso_mcmc)) - trace(S_test/n_test*C_glasso_mcmc);
+
+% (iii) Full MCMC
+C_chol = (mean(C_save_chol,3));
+
+
+
+loglik_bglasso(t-n_train+1) = log(det(C_chol)) - trace(S_test/n_test*C_chol);
+
+[loglik_glasso_cv(t-n_train+1), loglik_glasso_mcmc(t-n_train+1),loglik_bglasso(t-n_train+1)]
+
+
+FileResult = ['../Result/Bglasso_Exchange_t',num2str(t),'.mat'];
+save(FileResult,'loglik_bglasso','loglik_glasso_cv','loglik_glasso_mcmc','C_save_chol','lambda_save');
+
+
+end
+
+

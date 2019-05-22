@@ -1,0 +1,268 @@
+
+addpath ../L1precision
+addpath ../Bglasso_DataAug/
+addpath ../Bglasso_Direct/
+
+p= 10; n = 100;
+
+%% AR(1) %%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+SigTrue = toeplitz(0.7.^[0:p-1]);
+adj_true = abs(inv(SigTrue))>0.001;
+ 
+
+SigTrue = eye(10);
+% % %% AR(1) %%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % CTrue = toeplitz([1,0.5,0.25,zeros(1,p-3)]);
+% % SigTrue = inv(CTrue);
+% % 
+% %% AR(1) %%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% SigTrue = eye(p);
+% SigTrue(1:4,1:4) = 0.5*ones(4)+(1-0.5)*eye(4);
+% SigTrue(5:10,5:10) = 0.5*ones(6)+(1-0.5)*eye(6);
+% 
+% 
+KTrue = inv(SigTrue);
+Y = rMNorm(zeros(p,1),SigTrue,n);
+S = Y*Y';
+
+ 
+% %%%%  Protein Example ;
+% Y = load('../Data/sachs.data');
+% 
+% reorder = [9:11,1:8];
+% Y = Y(:,reorder);
+% [n,p] = size(Y);
+% 
+% S = corr(Y)*n;
+
+
+indmx = reshape([1:p^2],p,p); % Uppermatrix index
+lowerind = indmx(tril(indmx,-1)>0); 
+
+
+rho = .06;
+lambda = rho*n;
+
+%% GLasso 
+rho_cv = glasso_cv(Y,[0:0.005:0.3],10)
+
+C_Lasso = L1precisionBCD(S/n,rho_cv);
+
+Sigma_Lasso = inv(C_Lasso);
+
+%L1_bglasso(rep) = trace(Sig_L1*inv(SigTrue)) - log(det(Sig_L1*inv(SigTrue))) - p;
+%L2_bglasso(rep) = sum(sum((Sig_L2-SigTrue).^2)) ;
+
+trace(Sigma_Lasso*inv(SigTrue)) - log(det(Sigma_Lasso*inv(SigTrue))) - p
+sum(sum((Sigma_Lasso-SigTrue).^2))
+
+
+burnin = 0; nmc = 2000;
+
+
+
+
+tic
+[C_save_aug] = Bglasso_mcmc_lambdafix(S,n,(rho*n)^2,C_Lasso,0,nmc);
+toc
+
+
+tic
+[C_save_dir] = Bglasso_mcmc_direct_lambdafix(S,n,rho*n,C_Lasso,burnin,nmc);
+toc
+
+
+tic
+% [T_save,d_save,C_save_chol,Sig_save] = Bglasso_mcmc_chol_lambdafix(S,n,rho_cv*n,C_Lasso,0,nmc);
+
+[T_save,d_save,C_save_chol,Sig_save,lambda_save] = Bglasso_mcmc_chol_lambdaunknown(S,n,1,0.01,C_Lasso,200,nmc);
+
+toc
+
+
+Sig_L1 = inv(mean(C_save_chol,3));
+Sig_L2 = mean(Sig_save,3);
+
+[trace(Sig_L1*inv(SigTrue)) - log(det(Sig_L1*inv(SigTrue))) - p sum(sum((Sig_L2-SigTrue).^2))] 
+
+
+
+
+
+
+
+
+for i =1:p
+    for j=1:i
+   ymin = min([squeeze(C_save_aug(i,j,:)); squeeze(C_save_chol(i,j,:))]);   
+   ymax = max([squeeze(C_save_aug(i,j,:)); squeeze(C_save_chol(i,j,:))]);
+%     
+figure(1); clf;
+hold on;
+plot(squeeze(C_save_aug(i,j,:)))
+plot([1,nmc],[C_Lasso(i,j),C_Lasso(i,j)],'r')
+ylim([ymin,ymax]);
+title(['Data Aug C(',int2str(i),',',int2str(j),')']);
+hold off;
+
+yacf1 = autocorr(squeeze(C_save_aug(i,j,:)),3);
+   
+
+
+figure(2); clf;
+hold on;
+plot(squeeze(C_save_chol(i,j,1:nmc)))
+plot([1,nmc],[C_Lasso(i,j),C_Lasso(i,j)],'r')
+title(['No Aug C(',int2str(i),',',int2str(j),')'])
+ylim([ymin,ymax]);
+hold off;
+yacf2 = autocorr(squeeze(C_save_chol(i,j,:)),3);
+   
+
+figure(3); clf;
+hold on;
+plot(squeeze(C_save_dir(i,j,:)))
+plot([1,nmc],[C_Lasso(i,j),C_Lasso(i,j)],'r')
+ylim([ymin,ymax]);
+title(['Data Aug C(',int2str(i),',',int2str(j),')']);
+hold off;
+
+yacf3 = autocorr(squeeze(C_save_dir(i,j,:)),3);
+
+
+[yacf1(2:end),yacf2(2:end), yacf3(2:end)]
+
+pause();
+   
+    end
+end
+
+
+
+
+%%%   D elements
+for i = 1:p
+%     ymin = min([d_save1(i,:),d_save(i,:)]);  
+%     ymax = max([d_save1(i,:),d_save(i,:)]);
+%     
+% figure(1);clf;
+% hold on;
+% plot(d_save1(i,:));
+% plot([1,nmc],[D_glasso(i,i),D_glasso(i,i)],'r');
+% ylim([ymin,ymax]);
+% hold off;
+
+
+figure(2);clf;
+hold on;
+plot(d_save(i,:));
+plot([1,nmc],[D_glasso(i,i),D_glasso(i,i)],'r');
+%ylim([ymin,ymax]);
+hold off;
+
+pause()
+end
+
+
+C_save2 = T_save;
+for iter = 1:nmc
+    C_save2(:,:,iter) = T_save(:,:,iter)*diag(d_save(:,iter))*T_save(:,:,iter)';
+end
+
+% % % %%%%  full bayesian glasso ;
+% % % Sig_save2 = C_save2;
+% % %   for i = 1:nmc
+% % %     Sig_save2(:,:,i) = inv(C_save2(:,:,i));
+% % %   end
+% % % 
+% % % Sig_L1 = inv(mean(C_save2,3));
+% % % 
+% % % Sig_L2 = mean(Sig_save2,3);
+% % % 
+% % % trace(Sig_L1*inv(SigTrue)) - log(det(Sig_L1*inv(SigTrue))) - p
+% % % sum(sum((Sig_L2-SigTrue).^2)) 
+% % % 
+% % % 
+% % % sum(sum((C_Lasso-inv(SigTrue)).^2)) 
+% % % 
+% % % sum(sum((mean(C_save2,3)-inv(SigTrue)).^2)) 
+% % % 
+
+
+% % 
+% % 
+% % 
+
+T_save1 = T_save; d_save1 = zeros(p,nmc);
+for iter = 1:nmc
+    Psi = chol(C_save(:,:,iter))';    
+    D = diag(diag(Psi)).^2; 
+    d_save1(:,iter) = diag(D);
+    T_save1(:,:,iter) =  Psi*inv(sqrt(D));
+
+end
+
+
+
+%%%   D elements
+for i = 1:p
+%     ymin = min([d_save1(i,:),d_save(i,:)]);  
+%     ymax = max([d_save1(i,:),d_save(i,:)]);
+%     
+% figure(1);clf;
+% hold on;
+% plot(d_save1(i,:));
+% plot([1,nmc],[D_glasso(i,i),D_glasso(i,i)],'r');
+% ylim([ymin,ymax]);
+% hold off;
+
+
+figure(2);clf;
+hold on;
+plot(d_save(i,:));
+plot([1,nmc],[D_glasso(i,i),D_glasso(i,i)],'r');
+%ylim([ymin,ymax]);
+hold off;
+
+pause()
+end
+
+
+
+
+
+%%%  T elements
+[p,p,nmc]=size(T_save);
+T_save2 = T_save;
+for i =2:p
+    for j=1:i-1
+        
+    ymin = min([squeeze(T_save1(i,j,:)); squeeze(T_save2(i,j,:))]);   
+   ymax = max([squeeze(T_save1(i,j,:)); squeeze(T_save2(i,j,:))]);
+    
+figure(1); clf;
+hold on;
+plot(squeeze(T_save1(i,j,:)))
+plot([1,nmc],[T_glasso(i,j),T_glasso(i,j)],'r')
+ylim([ymin,ymax]);
+title(['Data Aug T(',int2str(i),',',int2str(j),')']);
+hold off;
+
+        
+figure(2); clf;
+hold on;
+plot(squeeze(T_save2(i,j,1:nmc)))
+plot([1,nmc],[T_glasso(i,j),T_glasso(i,j)],'r')
+title(['No Aug T(',int2str(i),',',int2str(j),')'])
+ylim([ymin,ymax]);
+hold off;
+
+
+pause();
+   
+
+
+    end
+end
+
+

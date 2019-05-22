@@ -1,0 +1,129 @@
+function [Sig_save,C_save,lambda_save] = BayesGLasso_Columnwise(S,n,Sig,C,a_lambda,b_lambda,burnin,nmc)
+% Efficient Bayesian Graphical Lasso MCMC sampler using data-augmented
+% block(column) Gibbs sampler
+%Input:
+%     S = Y'*Y : sample covariance matrix * n
+%     n: sample size
+%     lambda:   |C|^(n/2) exp(-1/2 (SC) -  lambda ||C||_1 );
+%     Sig,C: initial Covariance and precision matrix C = inv(Sig);
+%     burnin, nmc : number of MCMC burnins and saved samples
+%     lambda ~ Ga(a_lambda,b_lambda)
+
+%Output:
+%     Sig_save: p by p by nmc saved MCMC samples of Sigma
+%     n: sample size
+%     lambda:   |C|^(n/2) exp(-1/2 (SC) -  lambda ||C||_1 );
+%     Sig,C: initial Covariance and precision matrix C = inv(Sig);
+%     burnin, nmc : number of MCMC burnins and saved samples
+%     lambda ~ Ga(a_lambda,b_lambda)
+
+
+
+[p] = size(S,1); indmx = reshape([1:p^2],p,p); 
+upperind = indmx(triu(indmx,1)>0); 
+
+indmx_t = indmx';
+lowerind = indmx_t(triu(indmx_t,1)>0); 
+
+
+C_save = zeros(p,p,nmc); Sig_save = C_save;
+lambda_save = zeros(1,nmc);
+ tau = zeros(p);
+
+ind_noi_all = zeros(p-1,p);
+for i = 1:p
+       if i==1  
+       ind_noi = [2:p]'; 
+      elseif i==p
+       ind_noi = [1:p-1]'; 
+      else
+       ind_noi = [1:i-1,i+1:p]';
+       end
+       
+       ind_noi_all(:,i) = ind_noi;
+end
+
+    apost = a_lambda + p*(p+1)/2; 
+
+
+for iter = 1: burnin+nmc    
+            
+       if(mod(iter,1000)==0)
+        fprintf('iter = %d \n',iter);
+       end
+
+       
+    % %%% Sample lambda 
+    bpost = b_lambda + sum(abs(C(:)));    
+    lambda = gamrnd(apost,1/bpost,1);
+    
+%%% sample tau off-diagonal        
+        Cadjust = max(abs(C(upperind)),10^-6);        
+        lambda_prime = (2*lambda)^2;  mu_prime = min(2*lambda./Cadjust,10^12);
+                
+
+    tau_temp =  1./rand_ig(mu_prime,lambda_prime);
+    tau(upperind) = tau_temp;
+    tau(lowerind) = tau_temp;
+    
+
+%%% sample Sig and C = inv(Sig)        
+    for i = 1:p
+
+
+      ind_noi = ind_noi_all(:,i);
+ 
+       
+      tau_temp = tau(ind_noi,i);
+       
+      Sig11 = Sig(ind_noi,ind_noi); Sig12 = Sig(ind_noi,i);
+      
+      invC11 = Sig11 - Sig12*Sig12'/Sig(i,i);
+      
+      Ci = (S(i,i)+2*lambda)*invC11+diag(1./tau_temp);
+  
+        
+        Ci_chol = chol(Ci);
+        
+        mu_i = -Ci\S(ind_noi,i);
+
+        beta = mu_i+ Ci_chol\randn(p-1,1);
+        
+        
+        C(ind_noi,i) = beta;
+        C(i,ind_noi) = beta;
+        gam = gamrnd(n/2+1,(S(i,i)+2*lambda)\2);
+        
+        C(i,i) = gam+beta'*invC11*beta;
+    
+        
+        %% Below updating Covariance matrix according to one-column change of precision matrix
+        invC11beta = invC11*beta;
+        
+        Sig(ind_noi,ind_noi) = invC11+invC11beta*invC11beta'/gam;
+        Sig12 = -invC11beta/gam;
+        Sig(ind_noi,i) = Sig12;
+        Sig(i,ind_noi) = Sig12';
+        Sig(i,i) = 1/gam;
+        
+    end
+
+
+    
+
+     
+
+
+      
+      
+       if iter >burnin           
+            Sig_save(:,:,iter-burnin) = Sig; 
+            C_save(:,:,iter-burnin) = C;
+            lambda_save(iter-burnin) = lambda;
+       end
+
+
+
+end
+
+
